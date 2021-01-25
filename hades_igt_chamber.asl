@@ -2,8 +2,7 @@
 	Credits
 		Sebastien S. (SystemFailu.re) : Creating main script, reversing engine.
 		ellomenop : Doing splits, helping test & misc. bug fixes.
-
-		gwyndol1n : added chamber data extensions
+		gwyndol1n: extra chamber info extensions
 */
 
 state("Hades")
@@ -25,25 +24,27 @@ startup
 		return ptr + offsetSize + remainingBytes + BitConverter.ToInt32(offsetBytes, 0);
 	});
 
-	// Settings Definition
+	// Settings Definitions
+	settings.Add("multiWep", false, "Multi Weapon Run");
+
 	settings.Add("extra_info", false, "Extra Chamber Info");
 	settings.CurrentDefaultParent = "extra_info";
 
 	settings.Add("chamber_count", true, "Show Chamber Count");
-	settings.Add("chaos_gates_count", true, "Show Chaos Gate Count");
+	settings.Add("chaos_gates_count", false, "Show Chaos Gate Count");
 
-	settings.Add("story_chamber_count", true, "Show Story Chamber Count");
+	settings.Add("story_chamber_count", false, "Show Story Chamber Count");
 	settings.SetToolTip("story_chamber_count", "Sisyphus, Eurydice, and Patroclus");
 
-	settings.Add("fountain_count", true, "Show Fountain Chamber Count");
+	settings.Add("fountain_count", false, "Show Fountain Chamber Count");
 	settings.SetToolTip("fountain_count", "Excludes Styx fountain");
 
-	settings.Add("map_name", true, "Show Current Map Name");
+	settings.Add("map_name", false, "Show Current Map Name");
 
-	settings.Add("boss_count", true, "Show Slow Boss Count");
+	settings.Add("boss_count", false, "Show Slow Boss Count");
 	settings.SetToolTip("boss_count", "Slow bosses: Tiny Vermin, Barge of Death, Asterius mini-boss");
 
-	settings.Add("logger", true, "Show Logging Information");
+	settings.Add("logger", false, "Show Logging Information");
 	settings.SetToolTip("logger", "Currently set to show `block_name`");
 
 	settings.Add("timer_labels", true, "Create missing text components underneath timer");
@@ -57,9 +58,10 @@ startup
 
 init
 {
+	/* Kind of hacky, this is used since it may take a second for the game to load our engine module */
+	Thread.Sleep(2000);
 	/* Do our signature scanning */
-
-	var engine = modules.Single(x => String.Equals(x.ModuleName, "EngineWin64s.dll", StringComparison.OrdinalIgnoreCase));
+	var engine = modules.FirstOrDefault(x => x.ModuleName.StartsWith("EngineWin64s")); // DX = EngineWin64s.dll, VK = EngineWin64sv.dll
 	var app_sig_target = new SigScanTarget(3, "48 8B 05 ?? ?? ?? ?? 74 0A"); // rip = 7
 	var world_sig_target = new SigScanTarget(3, "48 89 05 ?? ?? ?? ?? 83 78 0C 00 7E 40");
 	var playermanager_sig_target = new SigScanTarget(3, "4C 8B 05 ?? ?? ?? ?? 48 8B CB ");
@@ -81,10 +83,10 @@ init
 
 	/* Misc. vars */
 	vars.split = 0;
-	vars.current_run_time = "0:0.0";
+	vars.current_run_time = "0:0.1";
 	vars.current_map = "";
-	vars.current_total_seconds = 0;
-	vars.can_move_counter = 0;
+	vars.old_total_seconds = 0.1;
+	vars.current_total_seconds = 0.1;
 	vars.has_beat_hades = false;
 
 	// Additional variables for extensions
@@ -95,7 +97,7 @@ init
 		// Asterius: C_MiniBoss01
 		// Tiny Vermin: D_MiniBoss03
 		vars.starting_rooms = new string[] {"DeathArea", "DeathAreaBedroom", "RoomPreRun", "RoomOpening"};
-		vars.boss_rooms = new string[] {"C_MiniBoss01", "D_MiniBoss03"};
+		vars.boss_rooms = new string[] {"C_MiniBoss01", "D_MiniBoss03", "B_Wrapping01"};
 		vars.textSettings = new Dictionary<string, Dictionary<string, dynamic>>
 		{
 			{
@@ -218,13 +220,13 @@ update
 	vars.current_block_count = ExtensionMethods.ReadValue<int>(game, vars.current_player + 0x50);
 
 	/* Check if hash table size has changed */
-	if (last_block_count != vars.current_block_count)
+	if(last_block_count != vars.current_block_count)
 	{
 		IntPtr hash_table = ExtensionMethods.ReadPointer(game, vars.current_player + 0x40);
-		for (int i = 0; i < 2; i++)
+		for(int i = 0; i < 2; i++)
 		{
 			IntPtr block = ExtensionMethods.ReadPointer(game, hash_table + 0x8 * i);
-			if (block == IntPtr.Zero)
+			if(block == IntPtr.Zero)
 				continue;
 			var block_name = ExtensionMethods.ReadString(game, block, 32); // Guessing on size
 
@@ -234,26 +236,26 @@ update
 				vars.UpdateComponent(game, vars.textSettings["logger"]);
 			}
 
-			if (block_name.ToString() == "HadesKillPresentation")
+			if(block_name.ToString() == "HadesKillPresentation")
 				vars.has_beat_hades = true; // Run has finished!
 		}
 	}
 
 	/* Get our vector pointers, used to iterate through current screens */
-	if (vars.screen_manager != IntPtr.Zero)
+	if(vars.screen_manager != IntPtr.Zero)
 	{
 		IntPtr screen_vector_begin = ExtensionMethods.ReadPointer(game, vars.screen_manager + 0x48);
 		IntPtr screen_vector_end = ExtensionMethods.ReadPointer(game, vars.screen_manager + 0x50);
 		var num_screens = (screen_vector_end.ToInt64() - screen_vector_begin.ToInt64()) >> 3;
-		for (int i = 0; i < num_screens; i++)
+		for(int i = 0; i < num_screens; i++)
 		{
 			IntPtr current_screen = ExtensionMethods.ReadPointer(game, screen_vector_begin + 0x8 * i);
-			if (current_screen == IntPtr.Zero)
+			if(current_screen == IntPtr.Zero)
 				continue;
 			IntPtr screen_vtable = ExtensionMethods.ReadPointer(game, current_screen); // Deref to get vtable
 			IntPtr get_type_method = ExtensionMethods.ReadPointer(game, screen_vtable + 0x68); // Unlikely to change
-			int screen_type = ExtensionMethods.ReadValue<int>(game, get_type_method + 0x1);
-			if ((screen_type & 0x7) == 7)
+			int screen_type = ExtensionMethods.ReadValue<int>(game,get_type_method + 0x1);
+			if((screen_type & 0x7) == 7)
 			{
 				// We have found the InGameUI screen.
 				vars.game_ui = current_screen;
@@ -261,35 +263,36 @@ update
 			}
 		}
 	}
-
+	
 
 	/* Get our current run time */
-	if (vars.game_ui != IntPtr.Zero)
+	if(vars.game_ui != IntPtr.Zero)
 	{
 		IntPtr runtime_component = ExtensionMethods.ReadPointer(game, vars.game_ui + 0x510); // Possible to change if they adjust the UI class
-		if (runtime_component != IntPtr.Zero)
+		if(runtime_component != IntPtr.Zero)
 		{
 			/* This might break if the run goes over 99 minutes T_T */
 			vars.old_run_time = vars.current_run_time;
 			// Can possibly change. -> 48 8D 8E ? ? ? ? 48 8D 05 ? ? ? ? 4C 8B C0 66 0F 1F 44 00
 			vars.current_run_time = ExtensionMethods.ReadString(game, ExtensionMethods.ReadPointer(game, runtime_component + 0xAB8), 0x8);
-			if (vars.current_run_time == "PauseScr")
+			if(vars.current_run_time == "PauseScr")
 			{
-				vars.current_run_time = "0:0.0";
+				vars.current_run_time = "0:0.1";
 			}
-			// print("Time: " + vars.current_run_time.ToString() + ", Last: " + vars.old_run_time.ToString());
+			//print("Time: " + vars.current_run_time + ", Last: " + vars.old_run_time);
 		}
 	}
 
 	/* Get our current map name */
-	if (vars.world != IntPtr.Zero)
+	if(vars.world != IntPtr.Zero)
 	{
 		vars.is_running = ExtensionMethods.ReadValue<bool>(game, vars.world); // 0x0
 		IntPtr map_data = ExtensionMethods.ReadPointer(game, vars.world + 0xA0); // Unlikely to change.
-		if (map_data != IntPtr.Zero)
+		if(map_data != IntPtr.Zero)
 		{
 			vars.old_map = vars.current_map;
 			vars.current_map = ExtensionMethods.ReadString(game, map_data + 0x8, 0x10);
+			//print("Map: " + vars.current_map + ", Last:" + vars.old_map);
 
 			// if we're using extra info
 			if (settings["extra_info"]) {
@@ -309,7 +312,7 @@ update
 					if (settings["chaos_gates"] && vars.current_map.IndexOf("Secret") > -1) vars.textSettings["chaos_gates"]["Value"]++;
 					if (settings["story_chambers"] && vars.current_map.IndexOf("Story") > -1) vars.textSettings["story_chambers"]["Value"]++;
 					if (settings["fountain_count"] && vars.current_map.IndexOf("Reprieve") > -1 && vars.current_map.IndexOf("D") == -1) vars.textSettings["fountain_count"]["Value"]++;
-					if (settings["boss_count"] && Array.IndexOf(vars.boss_rooms, vars.current_map) > -1 || vars.current_map.IndexOf("Wrapping") > -1) vars.textSettings["boss_count"]["Value"]++;
+					if (settings["boss_count"] && Array.IndexOf(vars.boss_rooms, vars.current_map) > -1) vars.textSettings["boss_count"]["Value"]++;
 					// print("Map: " + vars.current_map + ", Last:" + vars.old_map);
 					vars.UpdateAllComponents(game);
 				}
@@ -319,56 +322,66 @@ update
 
 	/* Unused for now */
 	IntPtr player_unit = ExtensionMethods.ReadPointer(game, vars.current_player + 0x18);
-	if (player_unit != IntPtr.Zero)
+	if(player_unit != IntPtr.Zero)
 	{
 		IntPtr unit_input = ExtensionMethods.ReadPointer(game, player_unit + 0x560); // Could change -> 48 8B 91 ? ? ? ? 88 42 08
 	}
 
-	vars.old_total_seconds = vars.current_total_seconds;
-	vars.time_split = vars.current_run_time.Split(':', '.');
-	/* Convert the string time to singles */
-	vars.current_total_seconds = Convert.ToSingle(vars.time_split[0]) * 60 + Convert.ToSingle(vars.time_split[1]) + Convert.ToSingle(vars.time_split[2]) / 100;
+  vars.old_total_seconds = vars.current_total_seconds;
+  vars.time_split = vars.current_run_time.Split(':', '.');
+  /* Convert the string time to singles */
+  vars.current_total_seconds =
+      Convert.ToSingle(vars.time_split[0]) * 60 +
+      Convert.ToSingle(vars.time_split[1]) +
+      Convert.ToSingle(vars.time_split[2]) / 100;
 }
 
 start
 {
-	// Start the timer if in the first room and the timer either ticked up from 0, or if the old timer is greater than the new (in case of a dangling value from a previous run)
-	return (vars.current_map == "RoomOpening" && (vars.old_total_seconds > vars.current_total_seconds || (vars.old_total_seconds == 0 && vars.current_total_seconds != 0)));
-}
-
-split
-{
-	// Credits: ellomenop
-	// 1st Split if old map was one of the furies fights and new room is the Tartarus -> Asphodel mid biome room
-	if (((vars.old_map == "A_Boss01" || vars.old_map == "A_Boss02" || vars.old_map == "A_Boss03") && vars.current_map == "A_PostBoss01" && vars.split == 0)
-	||
-	// 2nd Split if old map was lernie (normal or EM2) and new room is the Asphodel -> Elysium mid biome room
-	((vars.old_map == "B_Boss01" || vars.old_map == "B_Boss02") && vars.current_map == "B_PostBoss01" && vars.split == 1)
-	||
-	// 3rd Split if old map was heroes and new room is the Elysium -> Styx mid biome room
-	(vars.old_map == "C_Boss01" && vars.current_map == "C_PostBoss01" && vars.split == 2)
-	||
-	// 4th Split if old map was the styx hub and new room is the dad fight
-	(vars.old_map == "D_Hub" && vars.current_map == "D_Boss01" && vars.split == 3)
-	||
-	// 5th and final split if we have beat dad
-	(vars.current_map == "D_Boss01" && vars.has_beat_hades && vars.split == 4))
+	// Start the timer if in the first room and the old timer is greater than the new (memory address holds the value from the previous run)
+	if (vars.current_map == "RoomOpening" && vars.old_total_seconds > vars.current_total_seconds)
 	{
-		vars.split++;
+		vars.split = 0;
+		vars.has_beat_hades = false;
 		return true;
 	}
 }
 
+split
+{
+  // Credits: ellomenop
+  // 1st Split if old map was one of the furies fights and new room is the Tartarus -> Asphodel mid biome room
+  if (((vars.old_map == "A_Boss01" || vars.old_map == "A_Boss02" || vars.old_map == "A_Boss03") && vars.current_map == "A_PostBoss01" && vars.split % 5 == 0)
+     ||
+     // 2nd Split if old map was lernie (normal or EM2) and new room is the Asphodel -> Elysium mid biome room
+     ((vars.old_map == "B_Boss01" || vars.old_map == "B_Boss02") && vars.current_map == "B_PostBoss01" && vars.split % 5 == 1)
+     ||
+     // 3rd Split if old map was heroes and new room is the Elysium -> Styx mid biome room
+     (vars.old_map == "C_Boss01" && vars.current_map == "C_PostBoss01" && vars.split % 5 == 2)
+     ||
+     // 4th Split if old map was the styx hub and new room is the dad fight
+     (vars.old_map == "D_Hub" && vars.current_map == "D_Boss01" && vars.split % 5 == 3)
+     ||
+     // 5th and final split if we have beat dad
+     (vars.current_map == "D_Boss01" && vars.has_beat_hades && vars.split % 5 == 4))
+    {
+      vars.split++;
+
+      // Clear this flag so that its false for the next weapon in multi-weapon runs
+      vars.has_beat_hades = false;
+      return true;
+    }
+}
+
 reset
 {
-	// Reset and clear state if Zag is currently in the courtyard
-	if (vars.current_map == "RoomPreRun")
+  // Reset and clear state if Zag is currently in the courtyard.  Don't reset in multiweapon runs
+	if(vars.current_map == "RoomPreRun" && !settings["multiWep"])
 	{
 		/* Reset all of our dynamic variables. */
 		vars.split = 0;
-		vars.time_split = "0:0.0".Split(':', '.');
-		vars.current_total_seconds = 0;
-		vars.can_move_counter = 0;
+		vars.time_split = "0:0.1".Split(':', '.');
+		vars.current_total_seconds = .1;
 		vars.has_beat_hades = false;
 		// Reset extension variables
 		foreach (KeyValuePair<string, Dictionary<string, dynamic>> setting in vars.textSettings)
@@ -381,10 +394,10 @@ reset
 
 gameTime
 {
-	int h = Convert.ToInt32(vars.time_split[0]) / 60;
-	int m = Convert.ToInt32(vars.time_split[0]) % 60;
-	int s = Convert.ToInt32(vars.time_split[1]);
-	int ms = Convert.ToInt32(vars.time_split[2] + "0");
+  int h = Convert.ToInt32(vars.time_split[0]) / 60;
+  int m = Convert.ToInt32(vars.time_split[0]) % 60;
+  int s = Convert.ToInt32(vars.time_split[1]);
+  int ms = Convert.ToInt32(vars.time_split[2] + "0");
 
-	return new TimeSpan(0, h, m, s, ms);
+  return new TimeSpan(0, h, m, s, ms);
 }
